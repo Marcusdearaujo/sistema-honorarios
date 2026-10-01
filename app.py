@@ -38,6 +38,33 @@ st.markdown("""
 def fmt_moeda(val):
     return f"R$ {val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def recalar_item(item):
+    val_bruto = item["Valor Bruto"]
+    pct_parc = item["Parceiro (%)"]
+    captador = item["Captador"]
+    
+    val_parc = val_bruto * (pct_parc / 100.0)
+    base_esc = val_bruto - val_parc
+    caixa = base_esc * 0.10
+    captacao = base_esc * 0.20
+    saldo_div = base_esc * 0.70
+    cota = saldo_div / 3.0
+    
+    return {
+        "Especificação": item["Especificação"],
+        "Valor Bruto": val_bruto,
+        "Parceiro (%)": pct_parc,
+        "Nome Parceiro": item.get("Nome Parceiro", ""),
+        "Valor Parceiro": val_parc,
+        "Base Escritório": base_esc,
+        "Caixa (10%)": caixa,
+        "Captador": captador,
+        "Cota (1/3)": cota,
+        "Renan": cota + (captacao if captador == "Renan" else 0.0),
+        "Marcus": cota + (captacao if captador == "Marcus" else 0.0),
+        "Letícia": cota + (captacao if captador == "Letícia" else 0.0)
+    }
+
 def gerar_pdf_balancete(df, totais):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
@@ -50,15 +77,14 @@ def gerar_pdf_balancete(df, totais):
     elements.append(Paragraph("LOBATO · ARAÚJO · ALENCAR ADVOCACIA", title_style))
     elements.append(Paragraph("DEMONSTRATIVO E BALANCETE MENSAL DE HONORÁRIOS", subtitle_style))
 
-    headers = ["Especificação", "Valor Bruto", "Imposto", "Parceiro", "Base Esc.", "Caixa (10%)", "Captador", "Renan", "Marcus", "Letícia"]
+    headers = ["Especificação", "Valor Bruto", "Parceiro", "Base Esc.", "Caixa (10%)", "Captador", "Renan", "Marcus", "Letícia"]
     table_data = [headers]
 
     for _, row in df.iterrows():
         table_data.append([
             str(row["Especificação"]),
             fmt_moeda(row["Valor Bruto"]),
-            fmt_moeda(row["Imposto"]),
-            fmt_moeda(row["Parceiro"]),
+            fmt_moeda(row["Valor Parceiro"]),
             fmt_moeda(row["Base Escritório"]),
             fmt_moeda(row["Caixa (10%)"]),
             str(row["Captador"]),
@@ -70,7 +96,6 @@ def gerar_pdf_balancete(df, totais):
     table_data.append([
         "TOTAIS CONSOLIDADOS",
         fmt_moeda(totais["bruto"]),
-        fmt_moeda(totais["imposto"]),
         fmt_moeda(totais["parceiro"]),
         fmt_moeda(totais["base"]),
         fmt_moeda(totais["caixa"]),
@@ -80,7 +105,7 @@ def gerar_pdf_balancete(df, totais):
         fmt_moeda(totais["leticia"])
     ])
 
-    t = Table(table_data, colWidths=[160, 70, 60, 60, 70, 65, 60, 70, 70, 70])
+    t = Table(table_data, colWidths=[180, 75, 75, 75, 70, 65, 75, 75, 75])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a2a3a')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
@@ -112,55 +137,78 @@ with col_l2:
 if 'honorarios' not in st.session_state:
     st.session_state.honorarios = []
 
+if 'edit_index' not in st.session_state:
+    st.session_state.edit_index = None
+
 # -----------------------------------------------------------------------------
-# FORMULÁRIO LATERAL DE CADASTRO
+# FORMULÁRIO LATERAL DE CADASTRO / EDIÇÃO
 # -----------------------------------------------------------------------------
-st.sidebar.markdown("## 📝 Novo Honorário")
-with st.sidebar.form("form_honorario", clear_on_submit=True):
-    especificacao = st.text_input("Especificação / Processo", placeholder="Ex: Sucumbência - Ação X")
-    valor_bruto = st.number_input("Valor Bruto (R$)", min_value=0.0, step=500.0, format="%.2f")
-    pct_imposto = st.number_input("Impostos / Taxas (%)", min_value=0.0, max_value=100.0, value=10.0, step=0.5)
-    pct_parceiro = st.number_input("Comissão Parceiro (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0)
-    parceiro = st.text_input("Nome do Parceiro", placeholder="Opção (Ex: Dr. Fulano)")
-    captador = st.selectbox("Sócio Captador (20%)", ["Renan", "Marcus", "Letícia"])
+st.sidebar.markdown("## 📝 Lançar / Editar Honorário")
+
+is_editing = st.session_state.edit_index is not None
+if is_editing:
+    item_edit = st.session_state.honorarios[st.session_state.edit_index]
+    default_esp = item_edit["Especificação"]
+    default_val = float(item_edit["Valor Bruto"])
+    default_parc_pct = float(item_edit["Parceiro (%)"])
+    default_parc_nome = item_edit.get("Nome Parceiro", "")
+    default_capt = item_edit["Captador"]
+    st.sidebar.info(f"✏️ Editando Lançamento #{st.session_state.edit_index + 1}")
+else:
+    default_esp = ""
+    default_val = 0.0
+    default_parc_pct = 0.0
+    default_parc_nome = ""
+    default_capt = "Renan"
+
+with st.sidebar.form("form_honorario"):
+    especificacao = st.text_input("Especificação / Processo", value=default_esp, placeholder="Ex: Sucumbência - Ação X")
+    valor_bruto = st.number_input("Valor Bruto (R$)", min_value=0.0, value=default_val, step=500.0, format="%.2f")
+    pct_parceiro = st.number_input("Comissão Parceiro (%)", min_value=0.0, max_value=100.0, value=default_parc_pct, step=1.0)
+    nome_parceiro = st.text_input("Nome do Parceiro", value=default_parc_nome, placeholder="Opção (Ex: Dr. Fulano)")
     
-    btn_salvar = st.form_submit_button("➕ Lançar e Calcular")
+    captador_opts = ["Renan", "Marcus", "Letícia"]
+    capt_idx = captador_opts.index(default_capt) if default_capt in captador_opts else 0
+    captador = st.selectbox("Sócio Captador (20%)", captador_opts, index=capt_idx)
+    
+    btn_label = "💾 Salvar Alterações" if is_editing else "➕ Lançar Honorário"
+    btn_salvar = st.form_submit_button(btn_label)
+
+if is_editing:
+    if st.sidebar.button("❌ Cancelar Edição"):
+        st.session_state.edit_index = None
+        st.rerun()
 
 if btn_salvar:
     if valor_bruto > 0 and especificacao.strip() != "":
-        val_imp = valor_bruto * (pct_imposto / 100)
-        pos_imp = valor_bruto - val_imp
-        val_parc = pos_imp * (pct_parceiro / 100)
-        base_esc = pos_imp - val_parc
-        caixa = base_esc * 0.10
-        captacao = base_esc * 0.20
-        saldo_div = base_esc * 0.70
-        cota = saldo_div / 3.0
-        
-        st.session_state.honorarios.append({
+        novo_item = {
             "Especificação": especificacao,
             "Valor Bruto": valor_bruto,
-            "Imposto": val_imp,
-            "Parceiro": val_parc,
-            "Base Escritório": base_esc,
-            "Caixa (10%)": caixa,
-            "Captador": captador,
-            "Cota (1/3)": cota,
-            "Renan": cota + (captacao if captador == "Renan" else 0.0),
-            "Marcus": cota + (captacao if captador == "Marcus" else 0.0),
-            "Letícia": cota + (captacao if captador == "Letícia" else 0.0)
-        })
-        st.sidebar.success("Lançamento adicionado com sucesso!")
+            "Parceiro (%)": pct_parceiro,
+            "Nome Parceiro": nome_parceiro,
+            "Captador": captador
+        }
+        item_calculado = recalar_item(novo_item)
+        
+        if is_editing:
+            st.session_state.honorarios[st.session_state.edit_index] = item_calculado
+            st.session_state.edit_index = None
+            st.sidebar.success("Lançamento atualizado com sucesso!")
+        else:
+            st.session_state.honorarios.append(item_calculado)
+            st.sidebar.success("Lançamento adicionado com sucesso!")
+        st.rerun()
+    else:
+        st.sidebar.error("Informe a especificação e um valor bruto maior que zero.")
 
 # -----------------------------------------------------------------------------
-# DASHBOARD E TABELA PRINCIPAL
+# DASHBOARD E CONFERÊNCIA/EDIÇÃO DOS LANÇAMENTOS
 # -----------------------------------------------------------------------------
 if st.session_state.honorarios:
     df = pd.DataFrame(st.session_state.honorarios)
     
     tot_bruto = df["Valor Bruto"].sum()
-    tot_imp = df["Imposto"].sum()
-    tot_parc = df["Parceiro"].sum()
+    tot_parc = df["Valor Parceiro"].sum()
     tot_base = df["Base Escritório"].sum()
     tot_caixa = df["Caixa (10%)"].sum()
     tot_renan = df["Renan"].sum()
@@ -168,7 +216,7 @@ if st.session_state.honorarios:
     tot_leticia = df["Letícia"].sum()
 
     totais_dict = {
-        "bruto": tot_bruto, "imposto": tot_imp, "parceiro": tot_parc,
+        "bruto": tot_bruto, "parceiro": tot_parc,
         "base": tot_base, "caixa": tot_caixa, "renan": tot_renan,
         "marcus": tot_marcus, "leticia": tot_leticia
     }
@@ -184,23 +232,43 @@ if st.session_state.honorarios:
     with c4:
         pdf_file = gerar_pdf_balancete(df, totais_dict)
         st.download_button(
-            label="📄 BAIXAR RELATÓRIO PDF",
+            label="📄 BAIXAR RELATÓRIO PDF (FINAL)",
             data=pdf_file,
             file_name="Balancete_Honorarios_Escritorio.pdf",
             mime="application/pdf",
             use_container_width=True
         )
 
-    st.markdown("### 📊 Balancete Detalhado do Mês")
+    st.markdown("### 📊 Balancete do Mês (Conferência e Ajustes)")
+    st.caption("Passe o olho na lista abaixo. Caso identifique qualquer erro em algum lançamento, clique em **Editar** ou **Excluir** ao lado da linha correspondente.")
 
+    for idx, row in df.iterrows():
+        col_info, col_b1, col_b2 = st.columns([8, 1, 1])
+        with col_info:
+            text_lin = f"**#{idx+1} - {row['Especificação']}** | Bruto: **{fmt_moeda(row['Valor Bruto'])}** | Parc: {fmt_moeda(row['Valor Parceiro'])} ({row['Parceiro (%)']}%) | Base: **{fmt_moeda(row['Base Escritório'])}** | Caixa: {fmt_moeda(row['Caixa (10%)'])} | Captador: **{row['Captador']}**"
+            st.markdown(text_lin)
+        with col_b1:
+            if st.button("✏️ Editar", key=f"edit_{idx}"):
+                st.session_state.edit_index = idx
+                st.rerun()
+        with col_b2:
+            if st.button("🗑️ Excluir", key=f"del_{idx}"):
+                st.session_state.honorarios.pop(idx)
+                if st.session_state.edit_index == idx:
+                    st.session_state.edit_index = None
+                st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### 📋 Visão Completa em Tabela")
     df_exibicao = df.copy()
-    cols_moeda = ["Valor Bruto", "Imposto", "Parceiro", "Base Escritório", "Caixa (10%)", "Cota (1/3)", "Renan", "Marcus", "Letícia"]
+    cols_moeda = ["Valor Bruto", "Valor Parceiro", "Base Escritório", "Caixa (10%)", "Cota (1/3)", "Renan", "Marcus", "Letícia"]
     for col in cols_moeda:
         df_exibicao[col] = df_exibicao[col].apply(fmt_moeda)
 
-    st.dataframe(df_exibicao, use_container_width=True)
+    st.dataframe(df_exibicao[["Especificação", "Valor Bruto", "Valor Parceiro", "Base Escritório", "Caixa (10%)", "Captador", "Renan", "Marcus", "Letícia"]], use_container_width=True)
 
-    st.markdown("### 💰 Repasse Final por Sócio")
+    st.markdown("### 💰 Repasse Final por Sócio no Mês")
     sc1, sc2, sc3 = st.columns(3)
     with sc1:
         st.markdown(f'<div class="kpi-card"><div class="kpi-title">Renan</div><div class="kpi-value">{fmt_moeda(tot_renan)}</div></div>', unsafe_allow_html=True)
@@ -209,8 +277,9 @@ if st.session_state.honorarios:
     with sc3:
         st.markdown(f'<div class="kpi-card"><div class="kpi-title">Letícia</div><div class="kpi-value">{fmt_moeda(tot_leticia)}</div></div>', unsafe_allow_html=True)
 
-    if st.button("🗑️ Limpar Lançamentos do Mês"):
+    if st.button("🗑️ Limpar Todos os Lançamentos"):
         st.session_state.honorarios = []
+        st.session_state.edit_index = None
         st.rerun()
 
 else:
